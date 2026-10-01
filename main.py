@@ -1,11 +1,49 @@
 import os
 import requests
 import json
+import random
 from datetime import datetime
 
 # Настройки для локальной модели
 MODEL_NAME = "qwen2.5:14b" 
 OLLAMA_URL = "http://localhost:11434/api/generate"
+
+# ==========================================
+# НОВЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С ШАБЛОНАМИ
+# ==========================================
+
+def load_list(file_path):
+    """Загружает список элементов из файла templates/, игнорируя заголовки"""
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        # Убираем пустые строки и строки, начинающиеся с # (заголовки markdown)
+        lines = [line.strip() for line in content.split('\n') 
+                 if line.strip() and not line.startswith('#')]
+        return lines
+    except FileNotFoundError:
+        print(f"⚠️ Файл не найден: {file_path}")
+        return []
+
+def build_unique_combination():
+    """Собирает уникальную случайную комбинацию элементов для статьи"""
+    anchors = load_list("templates/anchors.md")
+    sensory = load_list("templates/sensory.md")
+    scholars = load_list("templates/scholars.md")
+    endings = load_list("templates/endings.md")
+    
+    anchor = random.choice(anchors) if anchors else "старая тетрадь в клетку"
+    # Берем 3-4 случайные сенсорные детали
+    sensory_sample = random.sample(sensory, min(4, len(sensory))) if sensory else []
+    scholar = random.choice(scholars) if scholars else "Анна Суперанская — словари имён"
+    ending = random.choice(endings) if endings else "Закрыла тетрадь и убрала на полку"
+    
+    return {
+        "anchor": anchor,
+        "sensory": sensory_sample,
+        "scholar": scholar,
+        "ending": ending
+    }
 
 # Системный промпт v6.0 — исправленный и очищенный
 SYSTEM_PROMPT = """
@@ -237,6 +275,7 @@ def run_pipeline(topic):
 def generate_gold_v2(topic):
     print(f"\n⏳ Генерирую длинную статью по Золотому стандарту v2: 'Имя {topic}'... (это займёт 3-5 минут)")
     
+    # 1. Загружаем основной промпт
     gold_prompt = ""
     possible_paths = ["prompts/09_gold_standard_v2.md", "09_gold_standard_v2.md"]
     for path in possible_paths:
@@ -250,9 +289,50 @@ def generate_gold_v2(topic):
         print("❌ Ошибка: Не найден файл 09_gold_standard_v2.md")
         return
 
+    # 2. Загружаем эталонный пример (few-shot)
+    few_shot_example = ""
+    try:
+        with open("best_examples/05_full_articles.md", "r", encoding="utf-8") as f:
+            few_shot_example = f.read()
+    except FileNotFoundError:
+        print("⚠️ Не найден best_examples/05_full_articles.md, генерирую без эталона.")
+
+    # 3. Собираем уникальную комбинацию
+    combo = build_unique_combination()
+
+    # 4. Спрашиваем пользователя, но даём возможность использовать случайные значения
+    print(f"\n💡 Система подобрала случайный предмет-якорь: '{combo['anchor']}'")
+    user_anchor = input("Введи свой предмет-якорь (или нажми Enter, чтобы использовать случайный): ").strip()
+    anchor = user_anchor if user_anchor else combo['anchor']
+    
+    user_insight = input("Введи ключевой инсайт (или нажми Enter для стандартного): ").strip()
+    insight = user_insight if user_insight else "имя — это не выбор, а продолжение рода"
+
+    # 5. Формируем финальный промпт
+    final_prompt = f"""{gold_prompt}
+
+# 📚 ЭТАЛОННЫЙ ПРИМЕР (учит СТИЛЮ, не копируй дословно!)
+{few_shot_example}
+
+# 🎲 УНИКАЛЬНАЯ КОМБИНАЦИЯ ДЛЯ ЭТОЙ СТАТЬИ:
+**Предмет-якорь:** {anchor}
+**Сенсорные детали (используй 3-4 из этого списка):**
+{chr(10).join('- ' + s for s in combo['sensory'])}
+**Учёный/Действие:** {combo['scholar']}
+**Финал:** {combo['ending']}
+
+# 🎯 ТВОЯ ЗАДАЧА:
+Напиши УНИКАЛЬНУЮ статью по входным данным:
+- Тема (Имя): {topic}
+- Предмет-якорь: {anchor}
+- Ключевой инсайт: {insight}
+
+Используй элементы из "Уникальной комбинации", но создавай НОВЫЕ диалоги, ситуации и детали. НЕ копируй эталонный пример — он показывает только стиль и структуру.
+"""
+    
     payload = {
         "model": MODEL_NAME,
-        "prompt": f"{gold_prompt}\n\nВХОДНЫЕ ДАННЫЕ:\n- Тема: Имя {topic}\n- Бытовой предмет-якорь: старая тетрадь в клетку\n- Ключевой инсайт: имя — это не выбор, а продолжение рода\n\nНапиши полную статью по структуре и правилам выше.",
+        "prompt": final_prompt,
         "stream": False
     }
     
@@ -268,7 +348,8 @@ def generate_gold_v2(topic):
             return
         
         os.makedirs("output", exist_ok=True)
-        filename = f"output/gold_v2_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+        # Делаем имя файла более читаемым
+        filename = f"output/gold_v2_{topic}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
         with open(filename, "w", encoding="utf-8") as f:
             f.write(article_text)
         
@@ -340,7 +421,7 @@ def main():
         print("2. Запустить полный пайплайн (Оркестратор: Статья + SEO + Фото)")
         print("3. Отредактировать готовую статью (Редактор)")
         print("4. Переписать статью в живом стиле (Трансформер)")
-        print("5. Золотой стандарт v2 (Длинная статья с подзаголовками)")
+        print("5. Золотой стандарт v2 (Длинная статья с уникальными комбинациями)")
         print("6. Сгенерировать промты для фото (Фото-директор)")
         print("7. Выход")
         
