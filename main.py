@@ -312,6 +312,61 @@ def generate_photo_prompts(filename):
     except Exception as e:
         print(f"\n❌ Ошибка: {e}")
 
+def analyze_article(filename):
+    print(f"\n⏳ Анализирую статью (Feedback Loop): {filename}...")
+    
+    # 1. Читаем текст статьи
+    try:
+        with open(filename, "r", encoding="utf-8") as f:
+            article_text = f.read()
+    except FileNotFoundError:
+        print(f"❌ Ошибка: Файл '{filename}' не найден. Сохраните текст опубликованной статьи в .md файл и попробуйте снова.")
+        return
+
+    # 2. Загружаем промпт из созданного скилла
+    skill_prompt = ""
+    possible_paths = ["skills/article_analyzer/SKILL.md", "SKILL.md"]
+    for path in possible_paths:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                skill_prompt = f.read()
+            print(f"✅ Загружены правила анализа из: {path}")
+            break
+    
+    if not skill_prompt:
+        print("⚠️ Файл SKILL.md не найден, использую встроенные правила анализа.")
+        skill_prompt = "Проанализируй текст на наличие: предмета-якоря, сенсорики, географической конкретики, ритма, диалогов. Проверь запреты: эзотерика, маркеры ИИ, абстракции. Выведи отчет с метриками 1-10 по формату Feedback Loop."
+
+    # 3. Формируем запрос к Ollama
+    payload = {
+        "model": MODEL_NAME,
+        "prompt": f"{skill_prompt}\n\nВот текст статьи для анализа:\n\n{article_text}",
+        "stream": False,
+        "options": {"temperature": 0.3} # Низкая температура для строгого и точного анализа
+    }
+    
+    # 4. Отправляем запрос и сохраняем результат
+    try:
+        response = requests.post(OLLAMA_URL, json=payload)
+        response.raise_for_status()
+        result = response.json()
+        analysis_report = result.get("response", "")
+        
+        os.makedirs("output", exist_ok=True)
+        report_filename = f"output/analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+        with open(report_filename, "w", encoding="utf-8") as f:
+            f.write(analysis_report)
+        
+        print(f"\n✅ Отчёт агента-аналитика сохранён: {report_filename}")
+        print("--- Начало отчёта ---")
+        # Выводим первые 600 символов для предпросмотра в консоли
+        print(analysis_report[:600] + "...\n(полный текст сохранён в файле)")
+        print("--- Конец отчёта ---")
+        
+    except requests.exceptions.ConnectionError:
+        print("\n❌ Ошибка подключения к Ollama. Убедись, что программа запущена.")
+    except Exception as e:
+        print(f"\n❌ Произошла ошибка при анализе: {e}")
 
 # ==========================================
 # ГЛАВНОЕ МЕНЮ
@@ -328,9 +383,10 @@ def main():
         print("4. Переписать статью в живом стиле (Трансформер)")
         print("5. Золотой стандарт v2 (Длинная, структурированная статья)")
         print("6. Сгенерировать промты для фото (Фото-директор)")
-        print("7. Выход")
+        print("7. Анализ опубликованной статьи (Feedback Loop)") # <-- НОВЫЙ ПУНКТ
+        print("8. Выход")
         
-        choice = input("\nВыбери действие (1-7): ").strip()
+        choice = input("\nВыбери действие (1-8): ").strip()
         
         if choice == "1":
             topic = input("Введи имя для статьи (например, 'Мирослава'): ").strip()
@@ -353,12 +409,15 @@ def main():
             filename = input("Введи имя файла статьи для фото-промтов: ").strip()
             if filename and os.path.exists(filename): generate_photo_prompts(filename)
             else: print("❌ Файл не найден.")
-        elif choice == "7":
+        elif choice == "7": # <-- НОВЫЙ РЕЖИМ
+            filename = input("Введи имя файла со статьёй для анализа (например, published_anna.md): ").strip()
+            if filename and os.path.exists(filename): analyze_article(filename)
+            else: print("❌ Файл не найден. Сначала сохраните текст статьи в файл.")
+        elif choice == "8": # <-- ОБНОВЛЁННЫЙ ВЫХОД
             print("До встречи! 🌿")
             break
         else:
             print("❌ Неверный выбор. Попробуй снова.")
-
 
 if __name__ == "__main__":
     main()
